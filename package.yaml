@@ -24,6 +24,7 @@ dependencies:
 - random
 - criterion
 - parallel
+- deepseq
 
 ghc-options:
 - -Wall

@@ -2,6 +2,7 @@ import Data.List
 import System.Random
 import Criterion.Main
 import Control.Parallel
+import Control.Parallel.Strategies
 
 -- code borrowed from the Stanford Course 240h (Functional Systems in Haskell)
 -- I suspect it comes from Bryan O'Sullivan, author of Criterion
@@ -10,10 +11,23 @@ data T a = T !a !Int
 
 pmap :: (a->b) -> [a] -> [b]
 pmap _ [] = []
-pmap f (x:xs) = x' `par` y' `pseq` (x' : y')
+--pmap f (x:xs) = fx `par` fxs `pseq` (fx : fxs)
+pmap f (x:xs) = pseq (par fx fxs) (fx : fxs)
     where 
-        x' = f x
-        y' = pmap f xs
+        fx = f x
+        fxs = pmap f xs
+
+--rmap :: (a->b) -> [a] -> [b]
+--rmap _ [] = []
+--rmap f (x:xs) = runEval $ do 
+
+pMap :: (a -> b) -> [a] -> [b]
+pMap f [] = []
+pMap f (a:as) = runEval $ do
+  b <- rpar (f a)
+  bs <- pMap f as
+  return (b:bs)
+
 
 mean :: (RealFrac a) => [a] -> a
 mean = fini . foldl' go (T 0 0)
@@ -23,15 +37,26 @@ mean = fini . foldl' go (T 0 0)
       where m' = m + (x - m) / fromIntegral n'
             n' = n + 1
 
-
 resamples :: Int -> [a] -> [[a]]
 resamples k xs =
     take (length xs - k) $
     zipWith (++) (inits xs) (map (drop k) (tails xs))
 
+-- Regular jackknife
+--jackknife :: ([a] -> b) -> [a] -> [b]
+--jackknife f = map f . resamples 500
 
+-- Jackknife using pmap (par and pseq implementation)
+--jackknife :: ([a] -> b) -> [a] -> [b]
+--jackknife f = pmap f . resamples 500
+
+-- Jackknife using Eval monad
 jackknife :: ([a] -> b) -> [a] -> [b]
-jackknife f = pmap f . resamples 500
+jackknife f = pMap f . resamples 500
+
+-- Jackknife using parMap (built in)
+--jackknife :: NFData b => ([a] -> b) -> [a] -> [b]
+--jackknife f = parMap rseq f . resamples 500
 
 
 crud = zipWith (\x a -> sin (x / 300)**2 + a) [0..]
