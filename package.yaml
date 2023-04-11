@@ -25,6 +25,7 @@ dependencies:
 - criterion
 - parallel
 - deepseq
+- monad-par
 
 ghc-options:
 - -Wall
