@@ -3,6 +3,7 @@ import System.Random
 import Criterion.Main
 import Control.Parallel
 import Control.Parallel.Strategies
+import Data.List.Split (chunksOf)
 import Control.Monad.Par
 import Control.DeepSeq
 
@@ -158,6 +159,14 @@ parListMap f xs = map f xs `using` parList rdeepseq
 parListChunkMap :: NFData b => (a -> b) -> [a] -> [b]
 parListChunkMap f xs = map f xs `using` parListChunk 200 rdeepseq
 
+parBufferChunkMap :: NFData b => (a -> b) -> [a] -> [b]
+parBufferChunkMap f xs = withStrategy (parBuffer 30 rdeepseq) $
+                         concatMap (map f) $ chunkList 200 xs
+  where
+    chunkList :: Int -> [a] -> [[a]]
+    chunkList _ [] = []
+    chunkList n xs = take n xs : chunkList n (drop n xs)
+
 -------------------------------------------------------------------------
 
 main = do
@@ -166,44 +175,45 @@ main = do
   -- handy (later) to give same input different parallel functions
 
   let rs = crud xs ++ ys
-  putStrLn $ "sample mean:    " ++ show (mean rs)
-
-  let j = jackknife mean rs :: [Float]
-  putStrLn $ "jack mean min:  " ++ show (minimum j)
-  putStrLn $ "jack mean max:  " ++ show (maximum j)
-
-  -- Merge sort test
-  putStrLn $ "Mergesort output:  " ++ show (mergesort rs)
-  putStrLn $ "Parallel mergesort output:  " ++ show (pMergeSort rs)
-
-  -- Sum test
-  putStrLn $ "Sum output:  " ++ show (sum rs)
-  putStrLn $ "Parallel sum output:  " ++ show (pSum rs)
-
+--  putStrLn $ "sample mean:    " ++ show (mean rs)
+--
+--  let j = jackknife mean rs :: [Float]
+--  putStrLn $ "jack mean min:  " ++ show (minimum j)
+--  putStrLn $ "jack mean max:  " ++ show (maximum j)
+--
+--  -- Merge sort test
+--  putStrLn $ "Mergesort output:  " ++ show (mergesort rs)
+--  putStrLn $ "Parallel mergesort output:  " ++ show (pMergeSort rs)
+--
+--  -- Sum test
+--  putStrLn $ "Sum output:  " ++ show (sum rs)
+--  putStrLn $ "Parallel sum output:  " ++ show (pSum rs)
+--
   -- Sudoku solver using three types of parallelization
   file <- readFile "./app/sudoku17.16000.txt"
 
   let puzzles   = lines file
 
-  print(map solve puzzles)
-  print(parBufferMap solve puzzles)
-  print(parListMap solve puzzles)
-  print(parListChunkMap solve puzzles)
+--  print(map solve puzzles)
+--  print(parBufferMap solve puzzles)
+--  print(parListMap solve puzzles)
+--  print(parListChunkMap solve puzzles)
+  print(parBufferChunkMap solve puzzles)
 
-  defaultMain
-        [ 
-          bench "jackknife" (nf (jackknife  mean) rs)
-        , bench "pJackknife" (nf (pJackknife  mean) rs)
-        , bench "rJackknife" (nf (runEval . rJackknife  mean) rs)
---        , bench "parJackknife" (nf (parJackknife mean) rs)
-        , bench "sJackknife" (nf (sJackknife mean) rs)
-        , bench "pmJackknife" (nf (runPar . pmJackknife (return . mean)) rs)
-        , bench "mergesort" (nf (mergesort) rs)
-        , bench "pmergesort" (nf (pMergeSort) rs)
-        , bench "sum" (nf (sum) rs)
-        , bench "psum" (nf (pSum) rs)
-        , bench "sudoku/map" (nf (map solve) puzzles)
-        , bench "sudoku/parbuffer" (nf (parBufferMap solve) puzzles)
-        , bench "sudoku/parlist" (nf (parListMap solve) puzzles)
-        , bench "sudoku/parlistchunk" (nf (parListChunkMap solve) puzzles)
-         ]
+--  defaultMain
+--        [ 
+--          bench "jackknife" (nf (jackknife  mean) rs)
+--        , bench "pJackknife" (nf (pJackknife  mean) rs)
+--        , bench "rJackknife" (nf (runEval . rJackknife  mean) rs)
+----        , bench "parJackknife" (nf (parJackknife mean) rs)
+--        , bench "sJackknife" (nf (sJackknife mean) rs)
+--        , bench "pmJackknife" (nf (runPar . pmJackknife (return . mean)) rs)
+--        , bench "mergesort" (nf (mergesort) rs)
+--        , bench "pmergesort" (nf (pMergeSort) rs)
+--        , bench "sum" (nf (sum) rs)
+--        , bench "psum" (nf (pSum) rs)
+--        , bench "sudoku/map" (nf (map solve) puzzles)
+--        , bench "sudoku/parbuffer" (nf (parBufferMap solve) puzzles)
+--        , bench "sudoku/parlist" (nf (parListMap solve) puzzles)
+--        , bench "sudoku/parlistchunk" (nf (parListChunkMap solve) puzzles)
+--         ]
