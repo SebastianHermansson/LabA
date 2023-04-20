@@ -4,6 +4,12 @@ import Criterion.Main
 import Control.Parallel
 import Control.Parallel.Strategies
 import Control.Monad.Par
+import Control.DeepSeq
+
+import Sudoku
+import Control.Exception
+import System.Environment
+import Data.Maybe
 
 -- code borrowed from the Stanford Course 240h (Functional Systems in Haskell)
 -- I suspect it comes from Bryan O'Sullivan, author of Criterion
@@ -16,14 +22,14 @@ pmap _ [] = []
 --pmap f (x:xs) = fx `par` fxs `pseq` (fx : fxs)
 pmap f (x:xs) = pseq (par fx fxs) (fx : fxs)
     where 
-        fx = f x
+        fx = force f x
         fxs = pmap f xs
 
 -- A parallel map using rpar
-rmap :: (a -> b) -> [a] -> Eval [b]
+rmap :: (NFData b) => (a -> b) -> [a] -> Eval [b]
 rmap _ [] = return []
 rmap f (a:as) = do
-  b <- rpar (f a)
+  b <- rpar (force $ f a)
   bs <- rmap f as
   return (b:bs)
 
@@ -37,70 +43,7 @@ pmmap f as = do
   ibs <- mapM (spawn . f) as
   mapM get ibs
 
-----------------------------------------------------------
--- Merge sort using parallelization
-
--- A merge sort algorithm
-mergeSort :: Ord a => [a] -> [a]
-mergeSort [] = []
-mergeSort [x] = [x]
-mergeSort xs =
-    let (left, right) = split' xs
-    in merge (mergeSort left) (mergeSort right)
-
--- A function that splits a list on the middle
-split' :: [a] -> ([a], [a])
-split' xs = splitAt (length xs `div` 2) xs
-
-merge :: Ord a => [a] -> [a] -> [a]
-merge [] ys = ys
-merge xs [] = xs
-merge (x:xs) (y:ys)
-    | x < y     = x : merge xs (y:ys)
-    | otherwise = y : merge (x:xs) ys
-
--- A higher order parallel divide and conquer function
-divideAndConquer :: ([a] -> Bool) -> ([a] -> b) -> ((b,b) -> b) -> ([a] -> ([a],[a])) -> [a] -> Par b
-divideAndConquer baseCase solve combine divide xs =
-    if baseCase xs
-        then return $ solve xs
-        else do
-            let (left, right) = divide xs
-            leftResult  <- spawn $ divideAndConquer baseCase solve combine divide left
-            rightResult <- spawn $ divideAndConquer baseCase solve combine divide right
-            leftVal  <- get leftResult
-            rightVal <- get rightResult
-            return $ combine (leftVal, rightVal)
-
-
--- A parallel merge sort algorithm utilizing our higher order function
-pMergeSort :: (Ord a) => [a] -> [a]
-pMergeSort = runPar . divideAndConquer baseCase solve combine divide
-  where
-   baseCase [x] = True
-   baseCase _ = False
-   solve [x] = [x]
-   combine (a,b) = merge a b
-   divide = split'
-
----------------------------------------------------------------
--- Sudoku solverprep and map functions with strategies
-
-import Sudoku
-import Control.Exception
-import System.Environment
-import Data.Maybe
-
-someStratMap :: NFData b => (a -> b) -> [a] -> [b]
-someStratMap f xs = map f xs `using` parBuffer rdeepseq
-
---someStratMap :: NFData b => (a -> b) -> [a] -> [b]
---someStratMap f xs = map f xs `using` parList rdeepseq
-
---someStratMap :: NFData b => (a -> b) -> [a] -> [b]
---someStratMap f xs = map f xs `using` parListChunk rdeepseq
-
--------------------------------------------------------------------------
+------------------------------------------------------------
 
 mean :: (RealFrac a) => [a] -> a
 mean = do fini . foldl' go (T 0 0) 
@@ -124,10 +67,10 @@ pJackknife :: ([a] -> b) -> [a] -> [b]
 pJackknife f = pmap f . resamples 500
 
 -- Jackknife using Eval monad
-rJackknife :: ([a] -> b) -> [a] -> Eval [b]
+rJackknife :: (NFData b) => ([a] -> b) -> [a] -> Eval [b]
 rJackknife f = rmap f . resamples 500
 
--- Jackknife using parMap (built in). Can not be run with par monad imported
+---- Jackknife using parMap (built in). Can not be run with par monad imported
 --parJackknife :: NFData b => ([a] -> b) -> [a] -> [b]
 --parJackknife f xs = parMap rdeepseq f (resamples 500 xs)
 
@@ -142,6 +85,81 @@ pmJackknife f = pmmap f . resamples 500
 
 crud = zipWith (\x a -> sin (x / 300)**2 + a) [0..]
 
+----------------------------------------------------------
+-- Divide and conquer
+
+-- A mergesort function
+
+mergesort :: Ord a => [a] -> [a]
+mergesort [] = []
+mergesort [x] = [x]
+mergesort xs = merge2 (mergesort left) (mergesort right)
+  where
+    (left, right) = splitAt (length xs `div` 2) xs
+
+merge2 :: Ord a => [a] -> [a] -> [a]
+merge2 [] ys = ys
+merge2 xs [] = xs
+merge2 (x:xs) (y:ys)
+  | x <= y    = x : merge2 xs (y:ys)
+  | otherwise = y : merge2 (x:xs) ys
+
+-- A function that splits a list on the middle and returns a list of those lists
+
+split' :: [a] -> [[a]]
+split' [] = [[], []]
+split' xs = [take n xs, drop n xs]
+  where n = (length xs + 1) `div` 2
+
+-- A function that merges two lists in order
+merge :: Ord a => [[a]] -> [a]
+merge [[], []] = []
+merge [[], ys] = ys
+merge [xs, []] = xs
+merge ((x:xs):(y:ys):z)
+    | x < y     = x : merge [xs,(y:ys)]
+    | otherwise = y : merge [(x:xs), ys]
+
+
+-- A higher order parallel divide and conquer algorithm
+divideAndConquer :: (NFData b, NFData a) => (a -> Bool) -> (a -> [a]) -> (a -> b) -> ([b] -> b) -> a -> b
+divideAndConquer shouldDivide divide solve combine input
+  | shouldDivide input = combine $ runEval . parList rdeepseq $ map (divideAndConquer shouldDivide divide solve combine) (divide input)
+  | otherwise          = solve input
+
+-- A parallel merge sort algorithm utilizing our higher order function
+pMergeSort :: (NFData a, Ord a) => [a] -> [a]
+pMergeSort = divideAndConquer baseCase divide solve combine 
+  where
+   baseCase x |length(x)<8 = False
+              |otherwise   = True
+   solve xs = sort xs
+   combine xs = merge xs
+   divide = split'
+
+-- A parallel sum function utilizing our higher order function
+pSum :: (Num a, NFData a) =>[a] -> a
+pSum = divideAndConquer baseCase divide solve combine 
+  where
+   baseCase x |length(x)<100 = False
+              |otherwise   = True
+   solve xs = sum xs
+   combine (x:y:_) = x + y
+   divide = split'
+---------------------------------------------------------------
+-- Sudoku map functions with strategies
+
+parBufferMap :: NFData b => (a -> b) -> [a] -> [b]
+parBufferMap f xs = map f xs `using` parBuffer 50 rdeepseq
+
+parListMap :: NFData b => (a -> b) -> [a] -> [b]
+parListMap f xs = map f xs `using` parList rdeepseq
+
+parListChunkMap :: NFData b => (a -> b) -> [a] -> [b]
+parListChunkMap f xs = map f xs `using` parListChunk 200 rdeepseq
+
+-------------------------------------------------------------------------
+
 main = do
   let (xs,ys) = splitAt 1500  (take 6000
                                (randoms (mkStdGen 211570155)) :: [Float] )
@@ -155,22 +173,37 @@ main = do
   putStrLn $ "jack mean max:  " ++ show (maximum j)
 
   -- Merge sort test
-  putStrLn $ "Mergesort output:  " ++ show (pMergeSort [3,1,6])
+  putStrLn $ "Mergesort output:  " ++ show (mergesort rs)
+  putStrLn $ "Parallel mergesort output:  " ++ show (pMergeSort rs)
 
-  -- Sudoku thing
-  file <- readFile "./app/sudoku.txt"
+  -- Sum test
+  putStrLn $ "Sum output:  " ++ show (sum rs)
+  putStrLn $ "Parallel sum output:  " ++ show (pSum rs)
+
+  -- Sudoku solver using three types of parallelization
+  file <- readFile "./app/sudoku17.16000.txt"
 
   let puzzles   = lines file
-      solutions = runEval (someStratMap solve puzzles)
 
-  evaluate (length puzzles)
-  print (length (filter isJust solutions))
+  print(map solve puzzles)
+  print(parBufferMap solve puzzles)
+  print(parListMap solve puzzles)
+  print(parListChunkMap solve puzzles)
 
   defaultMain
-        [ bench "jackknife" (nf (jackknife  mean) rs)
+        [ 
+          bench "jackknife" (nf (jackknife  mean) rs)
         , bench "pJackknife" (nf (pJackknife  mean) rs)
         , bench "rJackknife" (nf (runEval . rJackknife  mean) rs)
-        , bench "parJackknife" (nf (parJackknife mean) rs)
+--        , bench "parJackknife" (nf (parJackknife mean) rs)
         , bench "sJackknife" (nf (sJackknife mean) rs)
         , bench "pmJackknife" (nf (runPar . pmJackknife (return . mean)) rs)
+        , bench "mergesort" (nf (mergesort) rs)
+        , bench "pmergesort" (nf (pMergeSort) rs)
+        , bench "sum" (nf (sum) rs)
+        , bench "psum" (nf (pSum) rs)
+        , bench "sudoku/map" (nf (map solve) puzzles)
+        , bench "sudoku/parbuffer" (nf (parBufferMap solve) puzzles)
+        , bench "sudoku/parlist" (nf (parListMap solve) puzzles)
+        , bench "sudoku/parlistchunk" (nf (parListChunkMap solve) puzzles)
          ]

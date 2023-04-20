@@ -26,7 +26,7 @@ dependencies:
 - parallel
 - deepseq
 - monad-par
-
+- array
 ghc-options:
 - -Wall
 - -Wcompat
